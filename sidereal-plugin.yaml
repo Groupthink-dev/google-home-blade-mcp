@@ -47,6 +47,8 @@ env:
     description: "Pub/Sub subscription for device events (optional)"
 
 setup:
+  icon: "\U0001F3E0"
+  blurb: "Control Google Home / Nest devices — thermostats, cameras, doorbells, and event streams via the SDM API."
   auth_model: oauth2
   complexity: involved
   fields:
@@ -75,6 +77,12 @@ setup:
       required: false
       placeholder: "projects/my-project/subscriptions/nest-events"
       help: "For event-driven triggers. Create in GCP Console → Pub/Sub"
+    - key: GOOGLE_HOME_WRITE_ENABLED
+      label: "Enable device commands"
+      type: boolean
+      secret: false
+      required: false
+      help: "Enables thermostat, camera, and fan control commands"
   oauth2:
     grant_type: authorization_code
     scopes:
