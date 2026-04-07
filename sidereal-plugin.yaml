@@ -5,10 +5,10 @@ author: piersdd
 licence: MIT
 tier: certified
 homepage: https://github.com/groupthink-dev/google-home-blade-mcp
-contract: smarthome-v1
+contract: home-v1
 
 services:
-  smarthome:
+  home:
     devices: ghome_devices
     device_detail: ghome_device
     structures: ghome_structures
