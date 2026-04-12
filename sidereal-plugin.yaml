@@ -4,6 +4,8 @@ description: "Google Home / Nest device control via SDM API — thermostats, cam
 author: piersdd
 licence: MIT
 tier: certified
+author_type: first-party
+readiness: production
 homepage: https://github.com/groupthink-dev/google-home-blade-mcp
 contract: home-v1
 
