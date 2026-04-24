@@ -2,7 +2,7 @@ name: google-home-blade-mcp
 version: "0.1.1"
 description: "Google Home / Nest device control via SDM API — thermostats, cameras, doorbells, event streams"
 author: piersdd
-licence: MIT
+license: MIT
 tier: certified
 author_type: first-party
 readiness: production
