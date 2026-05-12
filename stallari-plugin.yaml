@@ -116,6 +116,8 @@ setup:
 requires:
   sidereal: ">=0.3.0"
 
+  adapter_contracts:
+    - "home >= 1.0"
 conformance:
   required: "4/4"
   recommended: "5/5"
