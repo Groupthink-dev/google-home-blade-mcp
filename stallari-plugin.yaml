@@ -11,19 +11,26 @@ contract: home-v1
 
 services:
   home:
-    devices: ghome_devices
+    # Required (home-v1) — canonical axis names
+    entity_list: ghome_devices          # SDM "devices" ≈ canonical entities
+    entity_state: ghome_status          # current state of a device
+    entity_history: ghome_events        # SDM event stream is the closest history surface
+    area_list: ghome_rooms              # SDM "rooms" ≈ canonical areas
+
+    # Recommended (home-v1)
+    scene_activate: ghome_command       # invoke a structure-scoped command
+    climate_set: ghome_thermostat_setpoint
+    automation_trigger: ghome_command
+
+    # Google-Home-native extensions (not in canonical home-v1; useful for callers
+    # that consume this blade directly outside the adapter)
     device_detail: ghome_device
     structures: ghome_structures
-    rooms: ghome_rooms
-    status: ghome_status
     thermostat_mode: ghome_thermostat_mode
-    thermostat_setpoint: ghome_thermostat_setpoint
     thermostat_eco: ghome_thermostat_eco
     fan_set: ghome_fan_set
     camera_stream: ghome_camera_stream
     camera_image: ghome_camera_image
-    events: ghome_events
-    command: ghome_command
     thermostats: ghome_thermostats
 
 install:
