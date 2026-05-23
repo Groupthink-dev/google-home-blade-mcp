@@ -292,3 +292,50 @@ class TestGhomeEventsOrdering:
         result = await ghome_events()
         assert "evt-x" in result
         assert "evt-y" in result
+
+
+# ---------------------------------------------------------------------------
+# DD-338 Phase C Wave 2 — N=3 byte-equal determinism for _meta-emitting tools
+# (latency_ms varies per call and is stripped before comparison)
+# ---------------------------------------------------------------------------
+
+
+def _strip_latency(result: str) -> str:
+    """Strip latency_ms from the trailing _meta envelope for byte-equal compare."""
+    import json
+    import re
+
+    match = re.search(r"\n\n_meta: (\{.*\})$", result, flags=re.DOTALL)
+    if match is None:
+        return result
+    meta = json.loads(match.group(1))
+    meta.pop("latency_ms", None)
+    body = result[: match.start()]
+    return f"{body}\n\n_meta: {json.dumps(meta, separators=(', ', ': '), ensure_ascii=False)}"
+
+
+class TestPhaseCWave2DeterministicMeta:
+    """N=3 byte-equal determinism harness for Phase C Wave 2 _meta-emitting tools."""
+
+    async def test_ghome_rooms_n3(self, mock_client: MagicMock) -> None:
+        outputs = [_strip_latency(await ghome_rooms(structure_id="struct-1")) for _ in range(3)]
+        assert all(o == outputs[0] for o in outputs), f"Non-deterministic: {outputs}"
+
+    async def test_ghome_devices_n3(self, mock_client: MagicMock) -> None:
+        outputs = [_strip_latency(await ghome_devices()) for _ in range(3)]
+        assert all(o == outputs[0] for o in outputs)
+
+    async def test_ghome_events_n3(self, mock_client: MagicMock) -> None:
+        mock_client.pull_events.return_value = [
+            {"timestamp": "2026-05-23T10:00:00Z", "event_id": "evt-1", "payload": {}},
+        ]
+        outputs = [_strip_latency(await ghome_events()) for _ in range(3)]
+        assert all(o == outputs[0] for o in outputs)
+
+    async def test_ghome_status_n3(self, mock_client: MagicMock) -> None:
+        outputs = [_strip_latency(await ghome_status()) for _ in range(3)]
+        assert all(o == outputs[0] for o in outputs)
+
+    async def test_ghome_thermostats_n3(self, mock_client: MagicMock) -> None:
+        outputs = [_strip_latency(await ghome_thermostats()) for _ in range(3)]
+        assert all(o == outputs[0] for o in outputs)
