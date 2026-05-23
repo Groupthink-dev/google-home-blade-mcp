@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from datetime import datetime
 from typing import Annotated, Any
 
 from fastmcp import FastMCP
@@ -90,6 +91,22 @@ async def _run(fn: Any, *args: Any, **kwargs: Any) -> Any:
     return await asyncio.to_thread(fn, *args, **kwargs)
 
 
+def _event_sort_key(ev: dict[str, Any]) -> tuple[float, str]:
+    """Sort key for ghome_events: newest-first by RFC3339 timestamp, tie-break on event_id.
+
+    DD-338 B.1.b — events sort newest-first (negative epoch); empty / unparseable
+    timestamps are treated as epoch 0 (oldest) and never raise.
+    """
+    ts = ev.get("timestamp") or ""
+    epoch = 0.0
+    if ts:
+        try:
+            epoch = datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            epoch = 0.0
+    return (-epoch, str(ev.get("event_id") or ""))
+
+
 # ===========================================================================
 # META (1 tool)
 # ===========================================================================
@@ -115,6 +132,7 @@ async def ghome_structures() -> str:
     """List all structures (homes) with their IDs."""
     try:
         structures = await _run(_get_client().list_structures)
+        structures = sorted(structures, key=lambda s: s.name)  # DD-338 B.1.b sort-before-return
         return format_structure_list(structures)
     except GoogleHomeError as e:
         return _error(e)
@@ -127,6 +145,7 @@ async def ghome_rooms(
     """List rooms in a structure."""
     try:
         rooms = await _run(_get_client().list_rooms, structure_id)
+        rooms = sorted(rooms, key=lambda r: r.name)  # DD-338 B.1.b sort-before-return
         return format_room_list(rooms)
     except GoogleHomeError as e:
         return _error(e)
@@ -152,6 +171,7 @@ async def ghome_devices(
             devices = await _run(_get_client().list_devices_by_type, full_type)
         else:
             devices = await _run(_get_client().list_devices)
+        devices = sorted(devices, key=lambda d: d.name)  # DD-338 B.1.b sort-before-return
         return format_device_list(devices)
     except GoogleHomeError as e:
         return _error(e)
@@ -408,6 +428,7 @@ async def ghome_events(
     try:
         clamped = max(1, min(25, max_messages))
         events = await _run(_get_client().pull_events, clamped)
+        events = sorted(events, key=_event_sort_key)  # DD-338 B.1.b newest-first + event_id tie-break
         return format_events(events)
     except GoogleHomeError as e:
         return _error(e)
@@ -423,6 +444,7 @@ async def ghome_status() -> str:
     """Compact status dashboard for all devices. One line per device with key metrics."""
     try:
         devices = await _run(_get_client().list_devices)
+        devices = sorted(devices, key=lambda d: d.name)  # DD-338 B.1.b sort-before-return
         return format_status_dashboard(devices)
     except GoogleHomeError as e:
         return _error(e)
@@ -433,6 +455,7 @@ async def ghome_thermostats() -> str:
     """All thermostats at a glance: ambient temp, setpoint, mode, HVAC status."""
     try:
         devices = await _run(_get_client().list_devices_by_type, DEVICE_TYPE_THERMOSTAT)
+        devices = sorted(devices, key=lambda d: d.name)  # DD-338 B.1.b sort-before-return
         return format_thermostat_list(devices)
     except GoogleHomeError as e:
         return _error(e)
