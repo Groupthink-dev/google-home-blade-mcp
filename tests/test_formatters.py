@@ -204,3 +204,36 @@ class TestFormatCommandResponse:
         result = format_command_response(resp)
         assert "image_url=" in result
         assert "image_token=img-tok" in result
+
+
+# ---------------------------------------------------------------------------
+# DD-338 Phase C Wave 2 — _append_meta helper
+# ---------------------------------------------------------------------------
+
+
+class TestAppendMeta:
+    def test_none_meta_returns_body_verbatim(self) -> None:
+        from google_home_blade_mcp.formatters import _append_meta
+
+        assert _append_meta("hello", None) == "hello"
+
+    def test_appends_meta_envelope(self) -> None:
+        import json
+        import re
+
+        from google_home_blade_mcp.formatters import _append_meta
+
+        meta = {
+            "matched_total": 5,
+            "returned": 3,
+            "filtered_by": ["device_type=THERMOSTAT"],
+            "latency_ms": 42,
+        }
+        result = _append_meta("body content", meta)
+        match = re.search(r"\n\n_meta: (\{.*\})$", result, flags=re.DOTALL)
+        assert match is not None
+        parsed = json.loads(match.group(1))
+        assert parsed["matched_total"] == 5
+        assert parsed["returned"] == 3
+        assert parsed["filtered_by"] == ["device_type=THERMOSTAT"]
+        assert parsed["latency_ms"] == 42

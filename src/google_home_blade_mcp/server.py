@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 from datetime import datetime
 from typing import Annotated, Any
 
@@ -143,12 +144,23 @@ async def ghome_rooms(
     structure_id: Annotated[str, Field(description="Structure ID from ghome_structures")],
 ) -> str:
     """List rooms in a structure."""
+    t0 = time.perf_counter()
     try:
         rooms = await _run(_get_client().list_rooms, structure_id)
-        rooms = sorted(rooms, key=lambda r: r.name)  # DD-338 B.1.b sort-before-return
-        return format_room_list(rooms)
     except GoogleHomeError as e:
         return _error(e)
+    rooms = sorted(rooms, key=lambda r: r.name)  # DD-338 B.1.b sort-before-return
+    latency_ms = int((time.perf_counter() - t0) * 1000)
+    # DD-338 Phase C Wave 2: structure_id IS server-side selection (rooms
+    # endpoint is scoped to one structure). matched_total = returned (no
+    # over-fetch + post-filter).
+    meta: dict[str, Any] = {
+        "matched_total": len(rooms),
+        "returned": len(rooms),
+        "filtered_by": [f"structure_id={structure_id}"],
+        "latency_ms": latency_ms,
+    }
+    return format_room_list(rooms, meta=meta)
 
 
 @mcp.tool()
@@ -159,6 +171,7 @@ async def ghome_devices(
     ] = None,
 ) -> str:
     """List all devices. Optional filter by type. Compact one-line-per-device output."""
+    t0 = time.perf_counter()
     try:
         if device_type:
             type_map = {
@@ -171,10 +184,23 @@ async def ghome_devices(
             devices = await _run(_get_client().list_devices_by_type, full_type)
         else:
             devices = await _run(_get_client().list_devices)
-        devices = sorted(devices, key=lambda d: d.name)  # DD-338 B.1.b sort-before-return
-        return format_device_list(devices)
     except GoogleHomeError as e:
         return _error(e)
+    devices = sorted(devices, key=lambda d: d.name)  # DD-338 B.1.b sort-before-return
+    latency_ms = int((time.perf_counter() - t0) * 1000)
+    # DD-338 Phase C Wave 2: device_type is honest worst-case client-side
+    # per OQ-3 (the by_type branch IS server-side, the unfiltered branch is
+    # not). Envelope discloses cardinality; matched_total == returned.
+    filtered_by: list[str] = []
+    if device_type:
+        filtered_by.append(f"device_type={device_type.upper()}")
+    meta: dict[str, Any] = {
+        "matched_total": len(devices),
+        "returned": len(devices),
+        "filtered_by": filtered_by,
+        "latency_ms": latency_ms,
+    }
+    return format_device_list(devices, meta=meta)
 
 
 # ===========================================================================
@@ -425,13 +451,24 @@ async def ghome_events(
     max_messages: Annotated[int, Field(description="Maximum events to retrieve (1-25)")] = 10,
 ) -> str:
     """Pull recent device events from Pub/Sub. Requires GOOGLE_HOME_PUBSUB_SUBSCRIPTION configured."""
+    t0 = time.perf_counter()
     try:
         clamped = max(1, min(25, max_messages))
         events = await _run(_get_client().pull_events, clamped)
-        events = sorted(events, key=_event_sort_key)  # DD-338 B.1.b newest-first + event_id tie-break
-        return format_events(events)
     except GoogleHomeError as e:
         return _error(e)
+    events = sorted(events, key=_event_sort_key)  # DD-338 B.1.b newest-first + event_id tie-break
+    latency_ms = int((time.perf_counter() - t0) * 1000)
+    # DD-338 Phase C Wave 2: max_messages clamp IS server-side discrimination
+    # (the Pub/Sub pull RPC honours the cap). matched_total == returned (no
+    # backlog cardinality visible without a separate metric call).
+    meta: dict[str, Any] = {
+        "matched_total": len(events),
+        "returned": len(events),
+        "filtered_by": [f"max_messages={clamped}"],
+        "latency_ms": latency_ms,
+    }
+    return format_events(events, meta=meta)
 
 
 # ===========================================================================
@@ -442,23 +479,43 @@ async def ghome_events(
 @mcp.tool()
 async def ghome_status() -> str:
     """Compact status dashboard for all devices. One line per device with key metrics."""
+    t0 = time.perf_counter()
     try:
         devices = await _run(_get_client().list_devices)
-        devices = sorted(devices, key=lambda d: d.name)  # DD-338 B.1.b sort-before-return
-        return format_status_dashboard(devices)
     except GoogleHomeError as e:
         return _error(e)
+    devices = sorted(devices, key=lambda d: d.name)  # DD-338 B.1.b sort-before-return
+    latency_ms = int((time.perf_counter() - t0) * 1000)
+    # DD-338 Phase C Wave 2: cross-cutting aggregate snapshot (C-shape).
+    # No filter arg; envelope value IS per-device cardinality disclosure.
+    meta: dict[str, Any] = {
+        "matched_total": len(devices),
+        "returned": len(devices),
+        "filtered_by": [],
+        "latency_ms": latency_ms,
+    }
+    return format_status_dashboard(devices, meta=meta)
 
 
 @mcp.tool()
 async def ghome_thermostats() -> str:
     """All thermostats at a glance: ambient temp, setpoint, mode, HVAC status."""
+    t0 = time.perf_counter()
     try:
         devices = await _run(_get_client().list_devices_by_type, DEVICE_TYPE_THERMOSTAT)
-        devices = sorted(devices, key=lambda d: d.name)  # DD-338 B.1.b sort-before-return
-        return format_thermostat_list(devices)
     except GoogleHomeError as e:
         return _error(e)
+    devices = sorted(devices, key=lambda d: d.name)  # DD-338 B.1.b sort-before-return
+    latency_ms = int((time.perf_counter() - t0) * 1000)
+    # DD-338 Phase C Wave 2: list_devices_by_type(THERMOSTAT) is server-side
+    # filter on device_type; envelope surfaces the audit dimension.
+    meta: dict[str, Any] = {
+        "matched_total": len(devices),
+        "returned": len(devices),
+        "filtered_by": ["device_type=THERMOSTAT"],
+        "latency_ms": latency_ms,
+    }
+    return format_thermostat_list(devices, meta=meta)
 
 
 # ===========================================================================

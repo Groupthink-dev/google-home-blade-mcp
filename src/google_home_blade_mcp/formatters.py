@@ -9,6 +9,7 @@ Design principles:
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from google_home_blade_mcp.models import (
@@ -20,6 +21,27 @@ from google_home_blade_mcp.models import (
     StructureInfo,
 )
 from google_home_blade_mcp.traits import get_camera_summary, get_thermostat_summary
+
+
+def _append_meta(body: str, meta: dict[str, Any] | None) -> str:
+    """Append a DD-338 _meta envelope as a JSON-tail block after body.
+
+    Wire shape (DD-338 Phase A.1 architect amendment, extended Phase C Wave 2):
+
+        <body>
+
+        _meta: {"matched_total": N, "returned": M, "filtered_by": [...],
+                "latency_ms": X, "redactions": [...], "next_cursor": ...}
+
+    Single line, JSON object, appended after `\\n\\n`. Assembler regex:
+    `\\n\\n_meta: (\\{.*\\})$`. Returns body verbatim when meta is None.
+    Required fields: matched_total, returned, filtered_by, latency_ms.
+    Optional: redactions, next_cursor, error_notes.
+    """
+    if meta is None:
+        return body
+    return f"{body}\n\n_meta: {json.dumps(meta, separators=(', ', ': '), ensure_ascii=False)}"
+
 
 # ---------------------------------------------------------------------------
 # Info / health
@@ -66,17 +88,21 @@ def format_structure_list(structures: list[StructureInfo]) -> str:
     return "\n".join(lines)
 
 
-def format_room_list(rooms: list[RoomInfo], structure_name: str | None = None) -> str:
+def format_room_list(
+    rooms: list[RoomInfo],
+    structure_name: str | None = None,
+    meta: dict[str, Any] | None = None,
+) -> str:
     """Format list of rooms."""
     if not rooms:
-        return "(no rooms)"
+        return _append_meta("(no rooms)", meta)
     header = f"## {structure_name} ({len(rooms)} rooms)\n" if structure_name else ""
     lines = []
     for r in rooms:
         parts = [r.display_name or "(unnamed)"]
         parts.append(f"id={r.room_id}")
         lines.append(" | ".join(parts))
-    return header + "\n".join(lines)
+    return _append_meta(header + "\n".join(lines), meta)
 
 
 # ---------------------------------------------------------------------------
@@ -122,11 +148,11 @@ def format_device_line(device: DeviceInfo) -> str:
     return " | ".join(parts)
 
 
-def format_device_list(devices: list[DeviceInfo]) -> str:
+def format_device_list(devices: list[DeviceInfo], meta: dict[str, Any] | None = None) -> str:
     """Format list of devices, one per line."""
     if not devices:
-        return "(no devices)"
-    return "\n".join(format_device_line(d) for d in devices)
+        return _append_meta("(no devices)", meta)
+    return _append_meta("\n".join(format_device_line(d) for d in devices), meta)
 
 
 # ---------------------------------------------------------------------------
@@ -234,11 +260,11 @@ def format_thermostat_line(device: DeviceInfo) -> str:
     return " | ".join(parts)
 
 
-def format_thermostat_list(devices: list[DeviceInfo]) -> str:
+def format_thermostat_list(devices: list[DeviceInfo], meta: dict[str, Any] | None = None) -> str:
     """Format all thermostats as compact status lines."""
     if not devices:
-        return "(no thermostats)"
-    return "\n".join(format_thermostat_line(d) for d in devices)
+        return _append_meta("(no thermostats)", meta)
+    return _append_meta("\n".join(format_thermostat_line(d) for d in devices), meta)
 
 
 # ---------------------------------------------------------------------------
@@ -246,16 +272,16 @@ def format_thermostat_list(devices: list[DeviceInfo]) -> str:
 # ---------------------------------------------------------------------------
 
 
-def format_status_dashboard(devices: list[DeviceInfo]) -> str:
+def format_status_dashboard(devices: list[DeviceInfo], meta: dict[str, Any] | None = None) -> str:
     """Format a compact status dashboard for all devices."""
     if not devices:
-        return "(no devices)"
+        return _append_meta("(no devices)", meta)
 
     online = sum(1 for d in devices if d.is_online)
     header = f"## Devices: {len(devices)} total, {online} online\n"
 
     lines = [format_device_line(d) for d in devices]
-    return header + "\n".join(lines)
+    return _append_meta(header + "\n".join(lines), meta)
 
 
 # ---------------------------------------------------------------------------
@@ -263,10 +289,10 @@ def format_status_dashboard(devices: list[DeviceInfo]) -> str:
 # ---------------------------------------------------------------------------
 
 
-def format_events(events: list[dict[str, Any]]) -> str:
+def format_events(events: list[dict[str, Any]], meta: dict[str, Any] | None = None) -> str:
     """Format Pub/Sub events."""
     if not events:
-        return "(no events)"
+        return _append_meta("(no events)", meta)
     lines = []
     for evt in events:
         parts = []
@@ -290,7 +316,7 @@ def format_events(events: list[dict[str, Any]]) -> str:
         if evt.get("event_id"):
             parts.append(f"msg_id={evt['event_id']}")
         lines.append(" | ".join(parts) if parts else str(evt))
-    return "\n".join(lines)
+    return _append_meta("\n".join(lines), meta)
 
 
 # ---------------------------------------------------------------------------

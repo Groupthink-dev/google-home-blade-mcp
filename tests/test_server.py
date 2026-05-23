@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -220,3 +221,82 @@ class TestConfirmGate:
         result = await ghome_command(device="Living Room", command="some.cmd", params={"key": "val"}, confirm=True)
         assert "Command on Living Room" in result
         mock_client.execute_command.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# DD-338 Phase C Wave 2 — audit_surface envelope coverage
+# (ghome_rooms, ghome_devices, ghome_events, ghome_status, ghome_thermostats)
+# ---------------------------------------------------------------------------
+
+
+def _parse_meta(result: str) -> dict[str, Any]:
+    """Extract the trailing _meta JSON envelope from a tool response.
+
+    Mirrors the assembler regex from the canonical wire shape:
+        \\n\\n_meta: (\\{.*\\})$
+    """
+    import json
+    import re
+
+    match = re.search(r"\n\n_meta: (\{.*\})$", result, flags=re.DOTALL)
+    assert match is not None, f"No _meta envelope in result:\n{result}"
+    return json.loads(match.group(1))
+
+
+class TestGhomeRoomsMeta:
+    async def test_emits_meta_envelope(self, mock_client: MagicMock) -> None:
+        result = await ghome_rooms(structure_id="struct-1")
+        meta = _parse_meta(result)
+        assert meta["matched_total"] == 2
+        assert meta["returned"] == 2
+        assert "structure_id=struct-1" in meta["filtered_by"]
+        assert isinstance(meta["latency_ms"], int)
+
+
+class TestGhomeDevicesMeta:
+    async def test_emits_meta_envelope_unfiltered(self, mock_client: MagicMock) -> None:
+        result = await ghome_devices()
+        meta = _parse_meta(result)
+        assert meta["matched_total"] == 3
+        assert meta["returned"] == 3
+        assert meta["filtered_by"] == []
+        assert isinstance(meta["latency_ms"], int)
+
+    async def test_emits_meta_envelope_filtered(self, mock_client: MagicMock) -> None:
+        result = await ghome_devices(device_type="THERMOSTAT")
+        meta = _parse_meta(result)
+        assert "device_type=THERMOSTAT" in meta["filtered_by"]
+
+
+class TestGhomeEventsMeta:
+    async def test_emits_meta_envelope_with_clamp(self, mock_client: MagicMock) -> None:
+        result = await ghome_events(max_messages=10)
+        meta = _parse_meta(result)
+        assert meta["matched_total"] == 0  # mock returns []
+        assert meta["returned"] == 0
+        assert "max_messages=10" in meta["filtered_by"]
+
+    async def test_max_messages_clamped(self, mock_client: MagicMock) -> None:
+        result = await ghome_events(max_messages=100)
+        meta = _parse_meta(result)
+        # 100 should clamp to 25 per server logic
+        assert "max_messages=25" in meta["filtered_by"]
+
+
+class TestGhomeStatusMeta:
+    async def test_emits_meta_envelope(self, mock_client: MagicMock) -> None:
+        result = await ghome_status()
+        meta = _parse_meta(result)
+        assert meta["matched_total"] == 3
+        assert meta["returned"] == 3
+        assert meta["filtered_by"] == []  # C-shape — no filter
+        assert isinstance(meta["latency_ms"], int)
+
+
+class TestGhomeThermostatsMeta:
+    async def test_emits_meta_envelope(self, mock_client: MagicMock) -> None:
+        result = await ghome_thermostats()
+        meta = _parse_meta(result)
+        assert meta["matched_total"] == 1
+        assert meta["returned"] == 1
+        assert "device_type=THERMOSTAT" in meta["filtered_by"]
