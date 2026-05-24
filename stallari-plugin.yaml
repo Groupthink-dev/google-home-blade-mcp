@@ -114,7 +114,7 @@ setup:
       url: "https://console.cloud.google.com/"
 
 requires:
-  sidereal: ">=0.3.0"
+  stallari: ">=0.3.0"
 
   adapter_contracts:
     - "home >= 1.0"

@@ -15,7 +15,7 @@ Control thermostats, stream cameras, monitor doorbells, and pull device events �
 | **Camera streams** | No | No | WebRTC/RTSP with 5-min session management |
 | **Event streaming** | No | No | Pub/Sub integration for motion, person, doorbell events |
 | **Batch operations** | No | N/A | `ghome_status` dashboard, `ghome_thermostats` overview |
-| **Marketplace ready** | No | No | `sidereal-plugin.yaml`, `home-v1` contract, SKILL.md |
+| **Marketplace ready** | No | No | `stallari-plugin.yaml`, `home-v1` contract, SKILL.md |
 
 ### Design Principles
 
@@ -188,13 +188,13 @@ src/google_home_blade_mcp/
 | Camera streams | 5-min sessions (extendable) |
 | Sandbox users | 25 max across 5 structures |
 
-## Sidereal Marketplace
+## Stallari Marketplace
 
 This blade ships with full marketplace scaffolding:
 
-- `sidereal-plugin.yaml` — Plugin manifest with `home-v1` contract, OAuth2 setup block, conformance declaration
+- `stallari-plugin.yaml` — Plugin manifest with `home-v1` contract, OAuth2 setup block, conformance declaration
 - `SKILL.md` — Token efficiency rules, workflow examples, tool reference for Claude
-- Security model aligned with Sidereal trust tiers (write gates, confirm gates, credential scrubbing)
+- Security model aligned with Stallari trust tiers (write gates, confirm gates, credential scrubbing)
 
 ## License
 
