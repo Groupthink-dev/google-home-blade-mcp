@@ -449,14 +449,46 @@ async def ghome_command(
 @mcp.tool()
 async def ghome_events(
     max_messages: Annotated[int, Field(description="Maximum events to retrieve (1-25)")] = 10,
+    ack: Annotated[
+        bool,
+        Field(
+            description=(
+                "Acknowledge (permanently consume) the returned messages. "
+                "Destructive — requires GOOGLE_HOME_WRITE_ENABLED=true."
+            )
+        ),
+    ] = False,
 ) -> str:
-    """Pull recent device events from Pub/Sub. Requires GOOGLE_HOME_PUBSUB_SUBSCRIPTION configured."""
+    """Pull recent device events from Pub/Sub. Requires GOOGLE_HOME_PUBSUB_SUBSCRIPTION configured.
+
+    Non-destructive by default (AUD-04-30): pulled messages are NOT
+    acknowledged, so they remain on the subscription backlog and redeliver
+    after the subscription's ack deadline expires. Caveats: repeat calls may
+    return the same events, and a re-pull made before the ack deadline lapses
+    may return fewer or no events until Pub/Sub redelivers.
+
+    Pass ack=true to permanently consume the returned messages. Acking mutates
+    the subscription backlog (events are gone for every future reader), so it
+    is gated under GOOGLE_HOME_WRITE_ENABLED=true like every other mutating
+    tool. The acknowledge is sent only after the events have been successfully
+    parsed and serialised; if the acknowledge call itself fails, an error is
+    returned and the messages will redeliver — no event loss.
+    """
+    if ack:
+        gate = require_write()
+        if gate:
+            return gate
     t0 = time.perf_counter()
     try:
         clamped = max(1, min(25, max_messages))
         events = await _run(_get_client().pull_events, clamped)
     except GoogleHomeError as e:
         return _error(e)
+    # Collect ack IDs, then strip them from the events before formatting —
+    # ack IDs are transport plumbing, not event content.
+    ack_ids = [str(ev["ack_id"]) for ev in events if ev.get("ack_id")]
+    for ev in events:
+        ev.pop("ack_id", None)
     events = sorted(events, key=_event_sort_key)  # DD-338 B.1.b newest-first + event_id tie-break
     latency_ms = int((time.perf_counter() - t0) * 1000)
     # DD-338 Phase C Wave 2: max_messages clamp IS server-side discrimination
@@ -468,7 +500,18 @@ async def ghome_events(
         "filtered_by": [f"max_messages={clamped}"],
         "latency_ms": latency_ms,
     }
-    return format_events(events, meta=meta)
+    if ack:
+        meta["acked"] = len(ack_ids)
+    out = format_events(events, meta=meta)
+    # AUD-04-30: ack as late as possible — only after parse + serialisation
+    # succeeded. On ack failure the messages redeliver, so we surface an error
+    # rather than a payload we'd be falsely claiming was consumed.
+    if ack and ack_ids:
+        try:
+            await _run(_get_client().acknowledge_events, ack_ids)
+        except GoogleHomeError as e:
+            return f"Error: acknowledge failed — messages will redeliver after the ack deadline. {e}"
+    return out
 
 
 # ===========================================================================

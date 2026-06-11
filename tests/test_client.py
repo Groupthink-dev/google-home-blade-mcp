@@ -11,6 +11,7 @@ from google_home_blade_mcp.client import GoogleHomeClient
 from google_home_blade_mcp.models import (
     AuthError,
     GoogleHomeConfig,
+    GoogleHomeError,
     NotFoundError,
 )
 
@@ -201,3 +202,105 @@ class TestGoogleHomeClient:
 
         info = client.info()
         assert info["status"] == "auth_error"
+
+
+# ---------------------------------------------------------------------------
+# Pub/Sub events — AUD-04-30 non-destructive pull + explicit ack
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def pubsub_config() -> GoogleHomeConfig:
+    return GoogleHomeConfig(
+        client_id="cid",
+        client_secret="csec",
+        refresh_token="rtok",
+        project_id="test-project",
+        pubsub_subscription="projects/test-project/subscriptions/nest-events",
+        write_enabled=True,
+    )
+
+
+def _pull_response() -> MagicMock:
+    import base64
+    import json as _json
+
+    payload = base64.b64encode(_json.dumps({"resourceUpdate": {"traits": {}}}).encode()).decode()
+    resp = MagicMock()
+    resp.json.return_value = {
+        "receivedMessages": [
+            {
+                "ackId": "ack-1",
+                "message": {"data": payload, "messageId": "msg-1", "publishTime": "2026-06-11T10:00:00Z"},
+            },
+            {
+                "ackId": "ack-2",
+                "message": {"data": payload, "messageId": "msg-2", "publishTime": "2026-06-11T10:01:00Z"},
+            },
+        ]
+    }
+    resp.raise_for_status = MagicMock()
+    return resp
+
+
+class TestPubSubEvents:
+    def test_pull_events_does_not_ack(self, pubsub_config: GoogleHomeConfig, mock_token_manager: MagicMock) -> None:
+        """AUD-04-30: pulling events must NOT acknowledge them."""
+        client = GoogleHomeClient(pubsub_config)
+        client._token_manager = mock_token_manager
+
+        with patch.object(client._http, "post", return_value=_pull_response()) as mock_post:
+            events = client.pull_events(max_messages=5)
+
+        assert len(events) == 2
+        urls = [call.args[0] for call in mock_post.call_args_list]
+        assert len(urls) == 1
+        assert urls[0].endswith(":pull")
+        assert not any(":acknowledge" in u for u in urls)
+
+    def test_pull_events_includes_ack_id(self, pubsub_config: GoogleHomeConfig, mock_token_manager: MagicMock) -> None:
+        client = GoogleHomeClient(pubsub_config)
+        client._token_manager = mock_token_manager
+
+        with patch.object(client._http, "post", return_value=_pull_response()):
+            events = client.pull_events()
+
+        assert [e["ack_id"] for e in events] == ["ack-1", "ack-2"]
+        assert [e["event_id"] for e in events] == ["msg-1", "msg-2"]
+
+    def test_acknowledge_events_posts_ack_ids(
+        self, pubsub_config: GoogleHomeConfig, mock_token_manager: MagicMock
+    ) -> None:
+        client = GoogleHomeClient(pubsub_config)
+        client._token_manager = mock_token_manager
+
+        ok = MagicMock()
+        ok.raise_for_status = MagicMock()
+        with patch.object(client._http, "post", return_value=ok) as mock_post:
+            count = client.acknowledge_events(["ack-1", "ack-2"])
+
+        assert count == 2
+        assert mock_post.call_count == 1
+        url = mock_post.call_args.args[0]
+        assert url.endswith(":acknowledge")
+        assert mock_post.call_args.kwargs["json"] == {"ackIds": ["ack-1", "ack-2"]}
+
+    def test_acknowledge_events_empty_is_noop(
+        self, pubsub_config: GoogleHomeConfig, mock_token_manager: MagicMock
+    ) -> None:
+        client = GoogleHomeClient(pubsub_config)
+        client._token_manager = mock_token_manager
+
+        with patch.object(client._http, "post") as mock_post:
+            assert client.acknowledge_events([]) == 0
+        mock_post.assert_not_called()
+
+    def test_pull_events_requires_subscription(
+        self, client_config: GoogleHomeConfig, mock_token_manager: MagicMock
+    ) -> None:
+        client = GoogleHomeClient(client_config)
+        client._token_manager = mock_token_manager
+        with pytest.raises(GoogleHomeError, match="not configured"):
+            client.pull_events()
+        with pytest.raises(GoogleHomeError, match="not configured"):
+            client.acknowledge_events(["ack-1"])

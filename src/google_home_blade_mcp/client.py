@@ -196,10 +196,15 @@ class GoogleHomeClient:
     # ------------------------------------------------------------------
 
     def pull_events(self, max_messages: int = 10) -> list[dict[str, Any]]:
-        """Pull events from Pub/Sub subscription.
+        """Pull events from Pub/Sub subscription — non-destructive (AUD-04-30).
 
         Requires GOOGLE_HOME_PUBSUB_SUBSCRIPTION to be set.
-        Returns list of event dicts with timestamp, device, event type.
+        Returns list of event dicts with timestamp, event_id, ack_id, payload.
+
+        Messages are NOT acknowledged here. They remain on the subscription
+        backlog and redeliver after the subscription's ack deadline expires.
+        Each event carries its ``ack_id`` so a caller can explicitly consume
+        it via :meth:`acknowledge_events`.
         """
         if not self._config.pubsub_subscription:
             raise GoogleHomeError("Pub/Sub subscription not configured. Set GOOGLE_HOME_PUBSUB_SUBSCRIPTION.")
@@ -216,19 +221,38 @@ class GoogleHomeClient:
             resp.raise_for_status()
             data = resp.json()
             messages = data.get("receivedMessages", [])
-
-            # Acknowledge messages
-            ack_ids = [m["ackId"] for m in messages if "ackId" in m]
-            if ack_ids:
-                self._http.post(
-                    f"https://pubsub.googleapis.com/v1/{sub}:acknowledge",
-                    headers=self._headers(),
-                    json={"ackIds": ack_ids},
-                    timeout=10.0,
-                )
-
             return [self._parse_event(m) for m in messages]
 
+        except httpx.HTTPStatusError as e:
+            raise classify_error(_scrub_credentials(f"{e.response.status_code}: {e.response.text}")) from e
+        except httpx.HTTPError as e:
+            raise GoogleHomeError(_scrub_credentials(str(e))) from e
+
+    def acknowledge_events(self, ack_ids: list[str]) -> int:
+        """Acknowledge (permanently consume) previously pulled Pub/Sub messages.
+
+        Destructive: acked messages are removed from the subscription backlog
+        and will never redeliver. Call only after the pulled events have been
+        successfully parsed and returned to the caller (ack-as-late-as-possible,
+        AUD-04-30).
+
+        Returns the number of ack IDs submitted.
+        """
+        if not self._config.pubsub_subscription:
+            raise GoogleHomeError("Pub/Sub subscription not configured. Set GOOGLE_HOME_PUBSUB_SUBSCRIPTION.")
+        if not ack_ids:
+            return 0
+
+        sub = self._config.pubsub_subscription
+        try:
+            resp = self._http.post(
+                f"https://pubsub.googleapis.com/v1/{sub}:acknowledge",
+                headers=self._headers(),
+                json={"ackIds": ack_ids},
+                timeout=10.0,
+            )
+            resp.raise_for_status()
+            return len(ack_ids)
         except httpx.HTTPStatusError as e:
             raise classify_error(_scrub_credentials(f"{e.response.status_code}: {e.response.text}")) from e
         except httpx.HTTPError as e:
@@ -249,5 +273,6 @@ class GoogleHomeClient:
         return {
             "timestamp": pub_msg.get("publishTime"),
             "event_id": pub_msg.get("messageId"),
+            "ack_id": message.get("ackId"),
             "payload": payload,
         }

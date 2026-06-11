@@ -101,6 +101,16 @@ class TestGhomeThermostats:
         assert "Living Room" in result
 
 
+def _make_event(event_id: str = "msg-1", ack_id: str | None = "ack-1") -> dict[str, Any]:
+    """Parsed Pub/Sub event as returned by GoogleHomeClient.pull_events."""
+    return {
+        "timestamp": "2026-06-11T10:00:00Z",
+        "event_id": event_id,
+        "ack_id": ack_id,
+        "payload": {"resourceUpdate": {"traits": {"sdm.devices.traits.Connectivity": {"status": "ONLINE"}}}},
+    }
+
+
 class TestGhomeEvents:
     async def test_no_events(self, mock_client: MagicMock) -> None:
         result = await ghome_events()
@@ -110,6 +120,52 @@ class TestGhomeEvents:
         mock_client.pull_events.side_effect = GoogleHomeError("Pub/Sub subscription not configured")
         result = await ghome_events()
         assert "Pub/Sub" in result
+
+    # ----- AUD-04-30: non-destructive read by default ----------------------
+
+    async def test_default_pull_does_not_ack(self, mock_client: MagicMock) -> None:
+        mock_client.pull_events.return_value = [_make_event(), _make_event("msg-2", "ack-2")]
+        result = await ghome_events()
+        mock_client.acknowledge_events.assert_not_called()
+        assert "msg_id=msg-1" in result
+        assert "ack-1" not in result  # ack IDs are plumbing, never surfaced
+
+    async def test_ack_requires_write_gate(self, mock_client: MagicMock) -> None:
+        with patch.dict(os.environ, {"GOOGLE_HOME_WRITE_ENABLED": "false"}):
+            result = await ghome_events(ack=True)
+        assert "disabled" in result.lower()
+        mock_client.pull_events.assert_not_called()
+        mock_client.acknowledge_events.assert_not_called()
+
+    async def test_ack_true_acks_after_successful_return(self, mock_client: MagicMock) -> None:
+        mock_client.pull_events.return_value = [_make_event(), _make_event("msg-2", "ack-2")]
+        with patch.dict(os.environ, {"GOOGLE_HOME_WRITE_ENABLED": "true"}):
+            result = await ghome_events(ack=True)
+        mock_client.acknowledge_events.assert_called_once_with(["ack-1", "ack-2"])
+        assert "msg_id=msg-1" in result
+        assert '"acked": 2' in result
+
+    async def test_failure_before_return_does_not_ack(self, mock_client: MagicMock) -> None:
+        mock_client.pull_events.side_effect = GoogleHomeError("transport failure")
+        with patch.dict(os.environ, {"GOOGLE_HOME_WRITE_ENABLED": "true"}):
+            result = await ghome_events(ack=True)
+        assert "Error:" in result
+        mock_client.acknowledge_events.assert_not_called()
+
+    async def test_ack_failure_reports_redelivery(self, mock_client: MagicMock) -> None:
+        mock_client.pull_events.return_value = [_make_event()]
+        mock_client.acknowledge_events.side_effect = GoogleHomeError("acknowledge 503")
+        with patch.dict(os.environ, {"GOOGLE_HOME_WRITE_ENABLED": "true"}):
+            result = await ghome_events(ack=True)
+        assert "Error:" in result
+        assert "redeliver" in result
+
+    async def test_ack_with_no_messages_skips_acknowledge(self, mock_client: MagicMock) -> None:
+        mock_client.pull_events.return_value = []
+        with patch.dict(os.environ, {"GOOGLE_HOME_WRITE_ENABLED": "true"}):
+            result = await ghome_events(ack=True)
+        mock_client.acknowledge_events.assert_not_called()
+        assert "(no events)" in result
 
 
 # ===========================================================================
